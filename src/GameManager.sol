@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.20;
 
-import {Ownable} from "openzeppelin-contracts/contracts/access/Ownable.sol";
+import {Ownable} from "@openzeppelin/access/Ownable.sol";
 import {GameInstance} from "./GameInstance.sol";
  
 contract GameManager is Ownable {

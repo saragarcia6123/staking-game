@@ -1,1 +1,3 @@
 /=lib/
+@chainlink=lib/chainlink-brownie-contracts/contracts/src/v0.8
+@openzeppelin=lib/openzeppelin-contracts/contracts

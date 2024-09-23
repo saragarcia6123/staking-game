@@ -1,13 +1,12 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.20;
 
-import {Ownable} from "openzeppelin-contracts/contracts/access/Ownable.sol";
-import {IERC20} from "openzeppelin-contracts/contracts/token/ERC20/IERC20.sol";
-import {SafeERC20} from "openzeppelin-contracts/contracts/token/ERC20/utils/SafeERC20.sol";
-import {VRFCoordinatorV2Interface} from "@chainlink/contracts/src/v0.8/interfaces/VRFCoordinatorV2Interface.sol";
-import {ReentrancyGuard} from "@openzeppelin/contracts/security/ReentrancyGuard.sol";
+import {Ownable} from "@openzeppelin/access/Ownable.sol";
+import {IERC20} from "@openzeppelin/token/ERC20/IERC20.sol";
+import {SafeERC20} from "@openzeppelin/token/ERC20/utils/SafeERC20.sol";
+import {ReentrancyGuard} from "@openzeppelin/utils/ReentrancyGuard.sol";
 
-contract GameInstance is Ownable {
+contract GameInstance is Ownable, ReentrancyGuard {
     using SafeERC20 for IERC20;
 
     address[] public participants;
@@ -39,7 +38,7 @@ contract GameInstance is Ownable {
     }
 
     event GameStarted(uint256 startTime);
-    event GameEnded(address winner);
+    event GameEnded(address winner, uint256 reward);
     event GameCancelled();
     event ParticipantJoined(address participant);
     event ParticipantLeft(address participant, uint256 refund);
@@ -49,14 +48,12 @@ contract GameInstance is Ownable {
     event RewardDistributed(address participant, uint256 amount);
 
     modifier gameInProgress() {
-        require(block.timestamp < startTime + gameDuration, "Game has ended");
         require(inProgress, "Game has not started yet");
         _;
     }
 
     modifier gameNotInProgress() {
         require(!inProgress, "Game is still in progress");
-        require(block.timestamp >= startTime + gameDuration, "Game is still in progress");
         _;
     }
 
@@ -133,7 +130,9 @@ contract GameInstance is Ownable {
         emit ParticipantJoined(msg.sender);
     }
 
-    function leave() external isParticipant {
+    function leave() external isParticipant gameNotInProgress {
+        uint256 contractBalance = gameToken.balanceOf(address(this));
+
         for (uint256 i = 0; i < participants.length; i++) {
             if (participants[i] == msg.sender) {
                 participants[i] = participants[participants.length - 1];
@@ -145,37 +144,12 @@ contract GameInstance is Ownable {
         delete participantData[msg.sender];
 
         uint256 refund = (block.timestamp - startTime) * entryFee / gameDuration;
-        require(gameToken.balanceOf(address(this)) >= refund, "Contract has insufficient game token balance to refund");
-        require(gameToken.transfer(msg.sender, refund), "Refund transfer failed");
+        require(contractBalance >= refund, "Contract has insufficient game token balance to refund");
+        
+        gameToken.safeTransfer(msg.sender, refund);
 
         emit ParticipantLeft(msg.sender, refund);
 
-        if (participants.length < minParticipants) {
-            cancel();
-        }
-    }
-
-    function kick(address participant) public onlyOwner {
-        require(participantData[participant].joinTimestamp > 0, "Participant not found");
-
-        for (uint256 i = 0; i < participants.length; i++) {
-            if (participants[i] == participant) {
-                participants[i] = participants[participants.length - 1];
-                participants.pop();
-                break;
-            }
-        }
-        delete participantData[participant];
-
-        uint256 refund = (block.timestamp - startTime) * entryFee / gameDuration;
-        require(gameToken.balanceOf(address(this)) >= refund, "Contract has insufficient game token balance to refund");
-        gameToken.safeTransfer(participant, refund);
-
-        emit ParticipantLeft(participant, refund);
-
-        if (participants.length < minParticipants) {
-            cancel();
-        }
     }
 
     function start() public onlyOwner {
@@ -190,45 +164,47 @@ contract GameInstance is Ownable {
 
     function end() public onlyOwner gameInProgress {
 
-        require(block.timestamp >= startTime + gameDuration, "Game has not ended yet");
+        if (participants.length >= minParticipants) {
+            require(block.timestamp >= startTime + gameDuration, "Game has not ended yet");
+        } else {
+            emit GameCancelled();
+        }
+        
         endTime = block.timestamp;
         inProgress = false;
 
-        address winner = selectWinner();
-        require(winner != address(0), "Winner not selected");
+        address[] storage _participants = participants;
+        uint256 numberOfParticipants = _participants.length;
+        mapping(address => Participant) storage _participantData = participantData;
+        uint256 _totalStakes = totalStakes;
+        uint256 _entryFeePool = entryFeePool;
 
-        uint256 winnerRewardAmount = getWinnerRewardAmount(winner);
-        distributeRewards();
-
-        gameToken.safeTransfer(winner, winnerRewardAmount);
-        emit GameEnded(winner);
-    }
-
-    function cancel() public onlyOwner {
-        require(inProgress, "Game has not started yet");
-        inProgress = false;
-        reset();
-        emit GameCancelled();
-    }
-
-    function reset() public onlyOwner gameNotInProgress {
-        uint256 numberOfParticipants = participants.length;
+        delete participants;
         for (uint256 i = 0; i < numberOfParticipants; i++) {
-            delete participantData[participants[i]];
+            delete participantData[_participants[i]];
+        }
+        delete totalStakes;
+        delete entryFeePool;
+
+        address winner = selectWinner(_participants);
+        require(winner != address(0), "Winner not selected");
+        uint256 winnerRewardAmount = getWinnerRewardAmount(_participantData[winner], _totalStakes, _entryFeePool);
+
+        uint256[] memory rewards = calculateRewards(_participants, _participantData, _entryFeePool, _totalStakes);
+        for (uint256 i = 0; i < _participants.length; i++) {
+            if (_participants[i] == winner) {
+                rewards[i] += winnerRewardAmount;
+            }
+            gameToken.safeTransfer(_participants[i], rewards[i]);
+            emit RewardDistributed(_participants[i], rewards[i]);
         }
 
-        participants = new address[](0);
-        totalStakes = 0;
-        entryFeePool = 0;
-        startTime = 0;
-        endTime = 0;
-
-        inProgress = false;
+        emit GameEnded(winner, winnerRewardAmount);
     }
 
     function stake(uint256 amount) external isParticipant gameInProgress {
-        require(amount >= minStakeAmount, "Stake amount too low");
         require(gameToken.balanceOf(msg.sender) >= amount, "Insufficient token balance");
+        require(amount >= minStakeAmount, "Stake amount too low");
 
         participantData[msg.sender].stakeDetails.push(Stake(amount, block.timestamp));
         participantData[msg.sender].totalAmountStaked += amount;
@@ -246,7 +222,7 @@ contract GameInstance is Ownable {
         Participant storage participant = participantData[msg.sender];
         uint256 unstakedAmount = 0;
 
-        for (uint256 i = participant.stakeDetails.length; i >= 0; i--) {
+        for (uint256 i = participant.stakeDetails.length; i > 0; i--) {
             if (unstakedAmount == amount) {
                 break;
             }
@@ -270,23 +246,20 @@ contract GameInstance is Ownable {
         emit Unstaked(msg.sender, amount);
     }
 
-    function selectWinner() internal view returns (address) {
-        require(participants.length > 0, "No participants");
-        require(inProgress, "Game has not started yet");
+    function selectWinner(address[] memory _participants) internal view gameNotInProgress returns (address) {
+        require(_participants.length > 0, "No participants");
 
-        bytes32 gameHash = keccak256(abi.encodePacked(blockhash(block.number - 1), participants));
-        bytes32 combinedHash = keccak256(abi.encodePacked(gameHash, blockhash(block.number - 1)));
-        bytes32 finalHash = keccak256(abi.encodePacked(block.prevrandao, combinedHash, participants.length));
-        uint256 scaledRandomIndex = uint256(finalHash) / (type(uint256).max / participants.length);
+        bytes32 gameHash = keccak256(abi.encodePacked(blockhash(block.number - 1), _participants));
+        bytes32 finalHash = keccak256(abi.encodePacked(block.prevrandao, gameHash));
+        uint256 randomIndex = uint256(finalHash) % _participants.length;
 
-        return participants[scaledRandomIndex % participants.length];
+        return _participants[randomIndex];
     }
 
-    function getWinnerRewardAmount(address winner) internal returns (uint256) {
+    function getWinnerRewardAmount(Participant memory winnerData, uint256 _totalStakes, uint256 _entryFeePool) internal view returns (uint256) {
         // reward winner depending on amount and duration of stakes
-        Participant storage winnerData = participantData[winner];
 
-        uint256 rewardTotal = (entryFeePool * winnerData.totalAmountStaked) / totalStakes;
+        uint256 rewardTotal = (_entryFeePool * winnerData.totalAmountStaked) / _totalStakes;
 
         for (uint256 i = 0; i < winnerData.stakeDetails.length; i++) {
             // multiply each stake by the duration it was staked for
@@ -294,24 +267,23 @@ contract GameInstance is Ownable {
             rewardTotal += winnerData.stakeDetails[i].amount * stakeDuration;
         }
 
-        participantData[winner].totalAmountStaked = 0;
-        delete participantData[winner].stakeDetails;
-
         return rewardTotal;
     }
 
-    function distributeRewards() internal returns (bool) {
+    function calculateRewards(address[] memory _participants, mapping(address => Participant) storage _participantData, uint256 _entryFeePool, uint256 _totalStakes) internal returns (uint256[] memory) {
         // distribute entry fee pool among all stakers, proportionate to their staked amounts
-        for (uint256 i = 0; i < participants.length; i++) {
+        uint256[] memory rewards = new uint256[](_participants.length);
+        
+        for (uint256 i = 0; i < _participants.length; i++) {
             if (participantData[participants[i]].totalAmountStaked == 0) {
+                rewards[i] = 0;
                 continue;
             }
-            uint256 reward = (entryFeePool * participantData[participants[i]].totalAmountStaked) / totalStakes;
+            uint256 reward = (_entryFeePool * _participantData[participants[i]].totalAmountStaked) / _totalStakes;
             participantData[participants[i]].totalAmountStaked = 0;
-            require(gameToken.balanceOf(address(this)) >= reward, "Insufficient contract balance");
-            gameToken.safeTransfer(participants[i], reward);
+            rewards[i] = reward;
         }
-        return true;
+        return rewards;
     }
 
 }
