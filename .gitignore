@@ -10,5 +10,8 @@ out/
 # Docs
 docs/
 
-# Dotenv file
+# Common
+node_modules/
+dist/
+*.log
 .env
