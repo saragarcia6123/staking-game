@@ -58,12 +58,18 @@ contract GameInstance is Ownable, ReentrancyGuard {
     }
 
     modifier isParticipant() {
-        require(participantData[msg.sender].joinTimestamp > 0, "Not a participant");
+        require(
+            participantData[msg.sender].joinTimestamp > 0,
+            "Not a participant"
+        );
         _;
     }
 
     modifier isNotParticipant() {
-        require(participantData[msg.sender].joinTimestamp == 0, "Already a participant");
+        require(
+            participantData[msg.sender].joinTimestamp == 0,
+            "Already a participant"
+        );
         _;
     }
 
@@ -87,6 +93,24 @@ contract GameInstance is Ownable, ReentrancyGuard {
         uint256 _entryFeePoolPercentageDeduction,
         uint256 _minStakeAmount
     ) Ownable(msg.sender) {
+        require(
+            _minParticipants > 1,
+            "Minimum participants must be greater than one"
+        );
+        require(
+            _maxParticipants > _minParticipants,
+            "Maximum participants cannot be less than minimum participants"
+        );
+        require(_entryFee > 0, "Entry fee must be greater than zero");
+        require(
+            _gameDuration > 1 minutes,
+            "Game duration must be greater than one minute"
+        );
+        require(
+            _minStakeAmount > 0,
+            "Minimum stake amount must be greater than zero"
+        );
+
         gameId = _gameId;
         gameToken = IERC20(_gameTokenAddress);
         minParticipants = _minParticipants;
@@ -95,34 +119,37 @@ contract GameInstance is Ownable, ReentrancyGuard {
         gameDuration = _gameDuration;
         entryFeePoolPercentageDeduction = _entryFeePoolPercentageDeduction;
         minStakeAmount = _minStakeAmount;
-
-        require(_minParticipants > 0, "Minimum participants must be greater than zero");
-        require(_maxParticipants > _minParticipants, "Max participants must be greater than minimum participants");
-        require(_entryFee > 0, "Entry fee must be greater than zero");
-        require(_gameDuration > 0, "Game duration must be greater than zero");
-        require(_minStakeAmount > 0, "Minimum stake amount must be greater than zero");
-
         participants = new address[](0);
-
     }
 
     function withdraw() external onlyOwner gameNotInProgress {
-        uint256 contractBalance = gameToken.balanceOf(address(this));
-        require(contractBalance > 0, "No balance to withdraw");
-        gameToken.safeTransfer(owner(), contractBalance);
+        require(
+            gameToken.balanceOf(address(this)) > 0,
+            "No balance to withdraw"
+        );
+        gameToken.safeTransfer(owner(), gameToken.balanceOf(address(this)));
     }
 
-    function join() external isNotParticipant gameNotInProgress  {
-        require(participants.length < maxParticipants, "Max participants reached");
-
-        require(gameToken.balanceOf(msg.sender) >= entryFee, "Insufficient token balance");
-        require(gameToken.allowance(msg.sender, address(this)) >= entryFee, "Allowance not set for entry fee");
+    function join() external isNotParticipant gameNotInProgress {
+        require(
+            participants.length < maxParticipants,
+            "Max participants reached"
+        );
+        require(
+            gameToken.balanceOf(msg.sender) >= entryFee,
+            "Insufficient token balance"
+        );
+        require(
+            gameToken.allowance(msg.sender, address(this)) >= entryFee,
+            "Allowance not set for entry fee"
+        );
 
         participants.push(msg.sender);
         participantData[msg.sender].joinTimestamp = block.timestamp;
         participantData[msg.sender].totalAmountStaked = 0;
 
-        uint256 entryFeePoolDeduction = (entryFee * entryFeePoolPercentageDeduction) / 100;
+        uint256 entryFeePoolDeduction = (entryFee *
+            entryFeePoolPercentageDeduction) / 100;
         entryFeePool += entryFeePoolDeduction;
 
         gameToken.safeTransferFrom(msg.sender, address(this), entryFee);
@@ -143,17 +170,23 @@ contract GameInstance is Ownable, ReentrancyGuard {
 
         delete participantData[msg.sender];
 
-        uint256 refund = (block.timestamp - startTime) * entryFee / gameDuration;
-        require(contractBalance >= refund, "Contract has insufficient game token balance to refund");
-        
+        uint256 refund = ((block.timestamp - startTime) * entryFee) /
+            gameDuration;
+
+        if (contractBalance < refund) {
+            refund = contractBalance;
+        }
+
         gameToken.safeTransfer(msg.sender, refund);
 
         emit ParticipantLeft(msg.sender, refund);
-
     }
 
     function start() public onlyOwner {
-        require(participants.length >= minParticipants, "Not enough participants");
+        require(
+            participants.length >= minParticipants,
+            "Not enough participants"
+        );
         require(!inProgress, "Game has already started");
 
         startTime = block.timestamp;
@@ -163,34 +196,45 @@ contract GameInstance is Ownable, ReentrancyGuard {
     }
 
     function end() public onlyOwner gameInProgress {
-
         if (participants.length >= minParticipants) {
-            require(block.timestamp >= startTime + gameDuration, "Game has not ended yet");
+            require(
+                block.timestamp >= startTime + gameDuration,
+                "Game has not ended yet"
+            );
         } else {
             emit GameCancelled();
         }
-        
+
         endTime = block.timestamp;
         inProgress = false;
 
         address[] storage _participants = participants;
         uint256 numberOfParticipants = _participants.length;
-        mapping(address => Participant) storage _participantData = participantData;
+        mapping(address => Participant)
+            storage _participantData = participantData;
         uint256 _totalStakes = totalStakes;
         uint256 _entryFeePool = entryFeePool;
 
+        delete totalStakes;
+        delete entryFeePool;
         delete participants;
         for (uint256 i = 0; i < numberOfParticipants; i++) {
             delete participantData[_participants[i]];
         }
-        delete totalStakes;
-        delete entryFeePool;
 
         address winner = selectWinner(_participants);
-        require(winner != address(0), "Winner not selected");
-        uint256 winnerRewardAmount = getWinnerRewardAmount(_participantData[winner], _totalStakes, _entryFeePool);
+        uint256 winnerRewardAmount = getWinnerRewardAmount(
+            _participantData[winner],
+            _totalStakes,
+            _entryFeePool
+        );
 
-        uint256[] memory rewards = calculateRewards(_participants, _participantData, _entryFeePool, _totalStakes);
+        uint256[] memory rewards = calculateRewards(
+            _participants,
+            _participantData,
+            _entryFeePool,
+            _totalStakes
+        );
         for (uint256 i = 0; i < _participants.length; i++) {
             if (_participants[i] == winner) {
                 rewards[i] += winnerRewardAmount;
@@ -203,10 +247,15 @@ contract GameInstance is Ownable, ReentrancyGuard {
     }
 
     function stake(uint256 amount) external isParticipant gameInProgress {
-        require(gameToken.balanceOf(msg.sender) >= amount, "Insufficient token balance");
+        require(
+            gameToken.balanceOf(msg.sender) >= amount,
+            "Insufficient token balance"
+        );
         require(amount >= minStakeAmount, "Stake amount too low");
 
-        participantData[msg.sender].stakeDetails.push(Stake(amount, block.timestamp));
+        participantData[msg.sender].stakeDetails.push(
+            Stake(amount, block.timestamp)
+        );
         participantData[msg.sender].totalAmountStaked += amount;
         totalStakes += amount;
 
@@ -216,8 +265,18 @@ contract GameInstance is Ownable, ReentrancyGuard {
     }
 
     function unstake(uint256 amount) external isParticipant gameInProgress {
+        require(
+            gameToken.balanceOf(address(this)) >= amount,
+            "Insufficient contract balance"
+        );
         require(amount > 0, "Unstake amount must be greater than zero");
-        require(participantData[msg.sender].totalAmountStaked >= amount, "Cannot unstake more than staked amount");
+        require(
+            participantData[msg.sender].totalAmountStaked >= amount,
+            "Cannot unstake more than staked amount"
+        );
+
+        participantData[msg.sender].totalAmountStaked -= amount;
+        totalStakes -= amount;
 
         Participant storage participant = participantData[msg.sender];
         uint256 unstakedAmount = 0;
@@ -227,63 +286,79 @@ contract GameInstance is Ownable, ReentrancyGuard {
                 break;
             }
             uint256 lastStakeAmount = participant.stakeDetails[i - 1].amount;
-            if(lastStakeAmount <= amount - unstakedAmount) {
+            if (lastStakeAmount <= amount - unstakedAmount) {
                 unstakedAmount += lastStakeAmount;
                 delete participant.stakeDetails[i - 1];
             } else {
-                participant.stakeDetails[i - 1].amount -= amount - unstakedAmount;
+                participant.stakeDetails[i - 1].amount -=
+                    amount -
+                    unstakedAmount;
                 unstakedAmount = amount;
             }
         }
-
-        require(unstakedAmount == amount, "Unstake amount does not match staked amount");
-
-        participantData[msg.sender].totalAmountStaked -= amount;
-        totalStakes -= amount;
 
         gameToken.safeTransfer(msg.sender, amount);
 
         emit Unstaked(msg.sender, amount);
     }
 
-    function selectWinner(address[] memory _participants) internal view gameNotInProgress returns (address) {
+    function selectWinner(
+        address[] memory _participants
+    ) internal view gameNotInProgress returns (address) {
         require(_participants.length > 0, "No participants");
 
-        bytes32 gameHash = keccak256(abi.encodePacked(blockhash(block.number - 1), _participants));
-        bytes32 finalHash = keccak256(abi.encodePacked(block.prevrandao, gameHash));
+        bytes32 gameHash = keccak256(
+            abi.encodePacked(blockhash(block.number - 1), _participants)
+        );
+        bytes32 finalHash = keccak256(
+            abi.encodePacked(block.prevrandao, gameHash)
+        );
         uint256 randomIndex = uint256(finalHash) % _participants.length;
 
         return _participants[randomIndex];
     }
 
-    function getWinnerRewardAmount(Participant memory winnerData, uint256 _totalStakes, uint256 _entryFeePool) internal view returns (uint256) {
+    function getWinnerRewardAmount(
+        Participant memory winnerData,
+        uint256 _totalStakes,
+        uint256 _entryFeePool
+    ) internal view returns (uint256) {
         // reward winner depending on amount and duration of stakes
 
-        uint256 rewardTotal = (_entryFeePool * winnerData.totalAmountStaked) / _totalStakes;
+        uint256 rewardTotal = (_entryFeePool * winnerData.totalAmountStaked) /
+            _totalStakes;
 
         for (uint256 i = 0; i < winnerData.stakeDetails.length; i++) {
             // multiply each stake by the duration it was staked for
-            uint256 stakeDuration = block.timestamp - winnerData.stakeDetails[i].timestamp;
+            uint256 stakeDuration = block.timestamp -
+                winnerData.stakeDetails[i].timestamp;
             rewardTotal += winnerData.stakeDetails[i].amount * stakeDuration;
         }
 
         return rewardTotal;
     }
 
-    function calculateRewards(address[] memory _participants, mapping(address => Participant) storage _participantData, uint256 _entryFeePool, uint256 _totalStakes) internal returns (uint256[] memory) {
+    function calculateRewards(
+        address[] memory _participants,
+        mapping(address => Participant) storage _participantData,
+        uint256 _entryFeePool,
+        uint256 _totalStakes
+    ) internal returns (uint256[] memory) {
         // distribute entry fee pool among all stakers, proportionate to their staked amounts
         uint256[] memory rewards = new uint256[](_participants.length);
-        
+
         for (uint256 i = 0; i < _participants.length; i++) {
             if (participantData[participants[i]].totalAmountStaked == 0) {
                 rewards[i] = 0;
                 continue;
             }
-            uint256 reward = (_entryFeePool * _participantData[participants[i]].totalAmountStaked) / _totalStakes;
+            uint256 reward = (_entryFeePool *
+                _participantData[participants[i]].totalAmountStaked) /
+                _totalStakes;
             participantData[participants[i]].totalAmountStaked = 0;
             rewards[i] = reward;
         }
+
         return rewards;
     }
-
 }
