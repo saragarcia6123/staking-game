@@ -19,7 +19,4 @@ dist/
 lib/
 .github/
 .gitmodules
-.gitignore
 README.md
-foundry.toml
-cache/
