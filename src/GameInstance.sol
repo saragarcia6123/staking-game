@@ -130,7 +130,7 @@ contract GameInstance is Ownable, ReentrancyGuard {
         gameToken.safeTransfer(owner(), gameToken.balanceOf(address(this)));
     }
 
-    function join() external nonReenrant isNotParticipant gameNotInProgress {
+    function join() external nonReentrant isNotParticipant gameNotInProgress {
         require(
             participants.length < maxParticipants,
             "Max participants reached"
