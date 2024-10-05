@@ -122,7 +122,7 @@ contract GameInstance is Ownable, ReentrancyGuard {
         participants = new address[](0);
     }
 
-    function withdraw() external onlyOwner gameNotInProgress {
+    function withdraw() external nonReentrant onlyOwner gameNotInProgress {
         require(
             gameToken.balanceOf(address(this)) > 0,
             "No balance to withdraw"
@@ -130,7 +130,7 @@ contract GameInstance is Ownable, ReentrancyGuard {
         gameToken.safeTransfer(owner(), gameToken.balanceOf(address(this)));
     }
 
-    function join() external isNotParticipant gameNotInProgress {
+    function join() external nonReenrant isNotParticipant gameNotInProgress {
         require(
             participants.length < maxParticipants,
             "Max participants reached"
@@ -157,7 +157,7 @@ contract GameInstance is Ownable, ReentrancyGuard {
         emit ParticipantJoined(msg.sender);
     }
 
-    function leave() external isParticipant gameNotInProgress {
+    function leave() external nonReentrant isParticipant gameNotInProgress {
         uint256 contractBalance = gameToken.balanceOf(address(this));
 
         for (uint256 i = 0; i < participants.length; i++) {
@@ -195,7 +195,7 @@ contract GameInstance is Ownable, ReentrancyGuard {
         emit GameStarted(startTime);
     }
 
-    function end() public onlyOwner gameInProgress {
+    function end() public nonReentrant onlyOwner gameInProgress {
         if (participants.length >= minParticipants) {
             require(
                 block.timestamp >= startTime + gameDuration,
@@ -246,7 +246,7 @@ contract GameInstance is Ownable, ReentrancyGuard {
         emit GameEnded(winner, winnerRewardAmount);
     }
 
-    function stake(uint256 amount) external isParticipant gameInProgress {
+    function stake(uint256 amount) external nonReentrant isParticipant gameInProgress {
         require(
             gameToken.balanceOf(msg.sender) >= amount,
             "Insufficient token balance"
@@ -264,7 +264,7 @@ contract GameInstance is Ownable, ReentrancyGuard {
         emit Staked(msg.sender, amount);
     }
 
-    function unstake(uint256 amount) external isParticipant gameInProgress {
+    function unstake(uint256 amount) external nonReentrant isParticipant gameInProgress {
         require(
             gameToken.balanceOf(address(this)) >= amount,
             "Insufficient contract balance"
